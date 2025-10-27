@@ -1,6 +1,8 @@
 import streamlit as st
 import joblib
 import numpy as np
+import pandas as pd
+import plotly.express as px
 
 # Load the trained model
 model = joblib.load('models/rf_model.pkl')
