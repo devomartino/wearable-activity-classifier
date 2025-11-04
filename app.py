@@ -3,39 +3,25 @@ import pandas as pd
 import numpy as np
 import joblib
 import plotly.express as px
-from gpt4all import GPT4All
+from openai import OpenAI
+import os
 
 # -----------------------------------------------------
-# Load local GPT4All model
-# -----------------------------------------------------
-@st.cache_resource
-def load_local_model():
-    try:
-        return GPT4All("mistral-7b-instruct.Q4_0.gguf")
-    except Exception as e:
-        st.error(f"⚠️ Failed to load GPT4All model: {e}")
-        return None
-
-local_model = load_local_model()
-
-def ask_local_llm(prompt: str) -> str:
-    """Generate a local response from GPT4All."""
-    if not local_model:
-        return "⚠️ No local model loaded. Please ensure mistral-7b-instruct.Q4_0.gguf is installed."
-    try:
-        with local_model.chat_session() as session:
-            response = session.generate(prompt, max_tokens=300, temp=0.7)
-        return response
-    except Exception as e:
-        return f"⚠️ GPT4All error: {e}"
-
-# -----------------------------------------------------
-# Streamlit UI setup
+# Streamlit Page Config (must be first command)
 # -----------------------------------------------------
 st.set_page_config(page_title="Daily Activity Classifier", layout="wide")
+
+# -----------------------------------------------------
+# OpenAI Client
+# -----------------------------------------------------
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+# -----------------------------------------------------
+# App Title
+# -----------------------------------------------------
 st.title("🏋️‍♂️ Daily Activity Classifier")
 st.markdown("""
-Predict whether your day was **Active** or **Inactive** based on your metrics.
+Predict whether your day was **Active** or **Inactive** based on your metrics.  
 You can enter data manually for a single day or upload a CSV for multiple days.
 """)
 
@@ -46,10 +32,13 @@ model = joblib.load("models/rf_model.pkl")
 features = joblib.load("models/rf_features.pkl")
 
 # -----------------------------------------------------
-# Utility functions
+# Utility Functions
 # -----------------------------------------------------
-def lbs_to_kg(pounds): return pounds * 0.453592
-def inches_to_cm(inches): return inches * 2.54
+def lbs_to_kg(pounds):
+    return pounds * 0.453592
+
+def inches_to_cm(inches):
+    return inches * 2.54
 
 def calculate_bmr(sex, weight_kg, height_cm):
     """Mifflin-St Jeor Equation (assuming age 30)."""
@@ -59,7 +48,7 @@ def calculate_bmr(sex, weight_kg, height_cm):
         return 10 * weight_kg + 6.25 * height_cm - 5 * 30 - 161
 
 # -----------------------------------------------------
-# Data input section
+# Prediction Section
 # -----------------------------------------------------
 st.header("1️⃣ Enter Your Metrics")
 input_option = st.radio("Input type:", ["Single Day Manual Input", "Upload CSV"])
@@ -82,7 +71,7 @@ if input_option == "Single Day Manual Input":
             "total_calories": [total_calories]
         })
 
-        # Ensure all expected columns exist
+        # Ensure feature alignment
         for col in features:
             if col not in X_input.columns:
                 X_input[col] = 0
@@ -151,9 +140,9 @@ else:
             st.plotly_chart(fig)
 
 # -----------------------------------------------------
-# Ask Coach AI (local GPT4All)
+# Ask Coach AI — OpenAI Cloud Model
 # -----------------------------------------------------
-st.header("2️⃣ Ask Coach AI (Local Model)")
+st.header("2️⃣ Ask Coach AI")
 user_q = st.text_area("Ask anything about improving your activity, routines, or habits:")
 
 if st.button("Get Advice") and user_q.strip():
@@ -175,5 +164,14 @@ if st.button("Get Advice") and user_q.strip():
     full_prompt = SAFETY_PROMPT + context + "User: " + user_q
 
     with st.spinner("Thinking..."):
-        coach_answer = ask_local_llm(full_prompt)
-    st.markdown(coach_answer)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": full_prompt}],
+                temperature=0.7,
+                max_tokens=400
+            )
+            coach_answer = response.choices[0].message.content
+            st.markdown(coach_answer)
+        except Exception as e:
+            st.error(f"⚠️ Error communicating with OpenAI: {e}")
