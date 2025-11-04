@@ -3,79 +3,86 @@ import pandas as pd
 import numpy as np
 import joblib
 import plotly.express as px
-from openai import OpenAI
+from gpt4all import GPT4All
 
-# -------------------------
-# Initialize OpenAI client safely
-# -------------------------
-try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-    llm_enabled = True
-except Exception:
-    client = None
-    llm_enabled = False
-    st.warning("⚠️ OpenAI API key not found — Coach AI disabled.")
+# -----------------------------------------------------
+# Load local GPT4All model
+# -----------------------------------------------------
+@st.cache_resource
+def load_local_model():
+    try:
+        return GPT4All("mistral-7b-instruct.Q4_0.gguf")
+    except Exception as e:
+        st.error(f"⚠️ Failed to load GPT4All model: {e}")
+        return None
 
-# -------------------------
-# App config and title
-# -------------------------
+local_model = load_local_model()
+
+def ask_local_llm(prompt: str) -> str:
+    """Generate a local response from GPT4All."""
+    if not local_model:
+        return "⚠️ No local model loaded. Please ensure mistral-7b-instruct.Q4_0.gguf is installed."
+    try:
+        with local_model.chat_session() as session:
+            response = session.generate(prompt, max_tokens=300, temp=0.7)
+        return response
+    except Exception as e:
+        return f"⚠️ GPT4All error: {e}"
+
+# -----------------------------------------------------
+# Streamlit UI setup
+# -----------------------------------------------------
 st.set_page_config(page_title="Daily Activity Classifier", layout="wide")
 st.title("🏋️‍♂️ Daily Activity Classifier")
 st.markdown("""
-Predict whether your day was **Active** or **Inactive** based on your metrics.  
-Enter your data manually or upload a CSV for multiple days.
+Predict whether your day was **Active** or **Inactive** based on your metrics.
+You can enter data manually for a single day or upload a CSV for multiple days.
 """)
 
-# -------------------------
-# Load model and features
-# -------------------------
+# -----------------------------------------------------
+# Load trained model and features
+# -----------------------------------------------------
 model = joblib.load("models/rf_model.pkl")
 features = joblib.load("models/rf_features.pkl")
 
-# -------------------------
-# Feature mapping
-# -------------------------
-FEATURE_MAP = {
-    "Workout Minutes": "Workout_Minutes",
-    "Total Calories": "Total_Calories",
-}
+# -----------------------------------------------------
+# Utility functions
+# -----------------------------------------------------
+def lbs_to_kg(pounds): return pounds * 0.453592
+def inches_to_cm(inches): return inches * 2.54
 
-# -------------------------
-# Helper: BMR calculation
-# -------------------------
-def calculate_bmr(sex, weight_lbs, height_in):
-    """Mifflin-St Jeor Equation (age assumed 30)"""
-    weight_kg = weight_lbs * 0.453592
-    height_cm = height_in * 2.54
+def calculate_bmr(sex, weight_kg, height_cm):
+    """Mifflin-St Jeor Equation (assuming age 30)."""
     if sex.lower() == "male":
         return 10 * weight_kg + 6.25 * height_cm - 5 * 30 + 5
     else:
         return 10 * weight_kg + 6.25 * height_cm - 5 * 30 - 161
 
-# -------------------------
-# Input section
-# -------------------------
+# -----------------------------------------------------
+# Data input section
+# -----------------------------------------------------
 st.header("1️⃣ Enter Your Metrics")
 input_option = st.radio("Input type:", ["Single Day Manual Input", "Upload CSV"])
 
 if input_option == "Single Day Manual Input":
     sex = st.selectbox("Sex", ["Male", "Female"])
-    weight_lbs = st.number_input("Weight (lbs)", min_value=50.0, step=1.0)
-    height_in = st.number_input("Height (inches)", min_value=48.0, step=0.5)
-    workout_minutes = st.number_input("Workout Minutes", min_value=0.0, step=1.0)
-    calories_burned_input = st.number_input("Calories Burned During Workout", min_value=0.0, step=10.0)
+    weight_lb = st.number_input("Weight (lbs)", min_value=0.0, value=160.0)
+    height_in = st.number_input("Height (inches)", min_value=0.0, value=68.0)
+    workout_minutes = st.number_input("Workout Minutes", min_value=0.0, value=30.0)
+    calories_burned_input = st.number_input("Calories Burned During Workout", min_value=0.0, value=250.0)
 
     if st.button("Predict Single Day"):
-        bmr = calculate_bmr(sex, weight_lbs, height_in)
+        weight_kg = lbs_to_kg(weight_lb)
+        height_cm = inches_to_cm(height_in)
+        bmr = calculate_bmr(sex, weight_kg, height_cm)
         total_calories = calories_burned_input + bmr
 
-        # Build and align input DataFrame
         X_input = pd.DataFrame({
-            "Workout_Minutes": [workout_minutes],
-            "Total_Calories": [total_calories]
+            "workout_minutes": [workout_minutes],
+            "total_calories": [total_calories]
         })
 
-        # Align to expected model features
+        # Ensure all expected columns exist
         for col in features:
             if col not in X_input.columns:
                 X_input[col] = 0
@@ -92,7 +99,7 @@ if input_option == "Single Day Manual Input":
 
         st.subheader("Visualization")
         fig = px.bar(
-            x=["Workout Minutes", "Total Calories"], 
+            x=["Workout Minutes", "Total Calories"],
             y=[workout_minutes, total_calories],
             labels={"x": "Metric", "y": "Value"},
             title="Daily Metrics"
@@ -105,23 +112,25 @@ if input_option == "Single Day Manual Input":
             "calories": total_calories
         }
 
-else:  # CSV upload
+else:
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
         st.write("📄 Raw Data Preview", df.head())
 
-        required_cols = ["sex", "weight_lbs", "height_in", "workout_minutes", "calories_burned"]
+        required_cols = ["sex", "weight_lb", "height_in", "workout_minutes", "calories_burned"]
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             st.error(f"Missing columns in CSV: {missing}")
         else:
-            df["bmr"] = df.apply(lambda x: calculate_bmr(x["sex"], x["weight_lbs"], x["height_in"]), axis=1)
-            df["Total_Calories"] = df["calories_burned"] + df["bmr"]
+            df["weight_kg"] = df["weight_lb"].apply(lbs_to_kg)
+            df["height_cm"] = df["height_in"].apply(inches_to_cm)
+            df["bmr"] = df.apply(lambda x: calculate_bmr(x["sex"], x["weight_kg"], x["height_cm"]), axis=1)
+            df["total_calories"] = df["calories_burned"] + df["bmr"]
 
             X_input = pd.DataFrame({
-                "Workout_Minutes": df["workout_minutes"],
-                "Total_Calories": df["Total_Calories"]
+                "workout_minutes": df["workout_minutes"],
+                "total_calories": df["total_calories"]
             })
             for col in features:
                 if col not in X_input.columns:
@@ -129,10 +138,10 @@ else:  # CSV upload
             X_input = X_input[features]
 
             df["prediction"] = model.predict(X_input)
-            df["prob_active"] = model.predict_proba(X_input)[:,1]
+            df["prob_active"] = model.predict_proba(X_input)[:, 1]
 
             st.subheader("Predictions")
-            st.write(df[["workout_minutes", "Total_Calories", "prediction", "prob_active"]])
+            st.write(df[["workout_minutes", "total_calories", "prediction", "prob_active"]])
 
             st.subheader("Visualization")
             x_vals = df["date"] if "date" in df.columns else [f"Day {i+1}" for i in range(len(df))]
@@ -141,20 +150,13 @@ else:  # CSV upload
                          title="Activity Classification per Day")
             st.plotly_chart(fig)
 
-            last_row = df.iloc[-1]
-            st.session_state["last_prediction"] = {
-                "date": str(last_row.get("date", "Last Day")),
-                "active": bool(last_row["prediction"]),
-                "calories": last_row["Total_Calories"]
-            }
-
-# -------------------------
-# Ask Coach AI
-# -------------------------
-st.header("2️⃣ Ask Coach AI")
+# -----------------------------------------------------
+# Ask Coach AI (local GPT4All)
+# -----------------------------------------------------
+st.header("2️⃣ Ask Coach AI (Local Model)")
 user_q = st.text_area("Ask anything about improving your activity, routines, or habits:")
 
-if llm_enabled and st.button("Get Advice") and user_q.strip():
+if st.button("Get Advice") and user_q.strip():
     last_prediction = st.session_state.get("last_prediction", None)
     context = ""
     if last_prediction:
@@ -165,23 +167,13 @@ if llm_enabled and st.button("Get Advice") and user_q.strip():
         )
 
     SAFETY_PROMPT = (
-        "You are an activity and recovery coach.\n"
-        "Do not provide medical advice or diagnoses.\n"
-        "Give practical, safe, and motivational suggestions only.\n"
-        "Answer in bullet points."
+        "You are a motivational, safe, and practical health coach.\n"
+        "Avoid medical advice or diagnoses.\n"
+        "Focus on motivation, recovery, and consistency.\n"
+        "Answer in short bullet points.\n"
     )
+    full_prompt = SAFETY_PROMPT + context + "User: " + user_q
 
-    full_prompt = SAFETY_PROMPT + "\n" + context + "User: " + user_q
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": full_prompt}],
-            temperature=0.7
-        )
-        coach_answer = response.choices[0].message.content
-        st.markdown(coach_answer)
-    except Exception as e:
-        st.error("Coach AI is temporarily unavailable. Try again later.")
-elif not llm_enabled:
-    st.info("Add your OpenAI API key in Streamlit Secrets to enable the Coach AI panel.")
+    with st.spinner("Thinking..."):
+        coach_answer = ask_local_llm(full_prompt)
+    st.markdown(coach_answer)
