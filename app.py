@@ -18,17 +18,18 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # -----------------------------------------------------
 # App Title
 # -----------------------------------------------------
-st.title("🏃‍♂️ Daily Activity Classifier (Now with Total Steps)")
+st.title("🏋️‍♂️ Daily Activity Classifier (Scaled Model)")
 st.markdown("""
-This app predicts whether your day was **Active** or **Inactive** based on activity metrics.  
-Enter data manually for one day or upload a CSV for multiple days.
+Predict whether your day was **Active** or **Inactive** based on activity metrics.  
+You can enter data manually for one day or upload a CSV for multiple days.
 """)
 
 # -----------------------------------------------------
-# Load trained model and features
+# Load trained model, features, and scaler
 # -----------------------------------------------------
 model = joblib.load("models/rf_model.pkl")
 features = joblib.load("models/rf_features.pkl")
+scaler = joblib.load("models/scaler.pkl")
 
 # -----------------------------------------------------
 # Helper Functions
@@ -69,14 +70,16 @@ if input_option == "Single Day Manual Input":
             "total_steps": [total_steps]
         })
 
-        # Align columns with model features
+        # Ensure feature order and scale
         for col in features:
             if col not in X_input.columns:
                 X_input[col] = 0
         X_input = X_input[features]
+        X_input_scaled = scaler.transform(X_input)
 
-        prediction = model.predict(X_input)[0]
-        prob = model.predict_proba(X_input)[0]
+        # Predict
+        prediction = model.predict(X_input_scaled)[0]
+        prob = model.predict_proba(X_input_scaled)[0]
 
         st.subheader("Prediction")
         if prediction == 1:
@@ -121,14 +124,14 @@ else:
                 "total_calories": df["total_calories"],
                 "total_steps": df["total_steps"]
             })
-
             for col in features:
                 if col not in X_input.columns:
                     X_input[col] = 0
             X_input = X_input[features]
+            X_input_scaled = scaler.transform(X_input)
 
-            df["prediction"] = model.predict(X_input)
-            df["prob_active"] = model.predict_proba(X_input)[:, 1]
+            df["prediction"] = model.predict(X_input_scaled)
+            df["prob_active"] = model.predict_proba(X_input_scaled)[:, 1]
 
             st.subheader("Predictions")
             st.write(df[["workout_minutes", "total_calories", "total_steps", "prediction", "prob_active"]])
