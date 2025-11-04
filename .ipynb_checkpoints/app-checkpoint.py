@@ -4,25 +4,24 @@ import numpy as np
 import joblib
 import plotly.express as px
 from openai import OpenAI
-import os
 
 # -----------------------------------------------------
-# Streamlit Page Config (must be first command)
+# Streamlit Page Config
 # -----------------------------------------------------
 st.set_page_config(page_title="Daily Activity Classifier", layout="wide")
 
 # -----------------------------------------------------
-# OpenAI Client
+# OpenAI Client (Ask Coach AI)
 # -----------------------------------------------------
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # -----------------------------------------------------
 # App Title
 # -----------------------------------------------------
-st.title("🏋️‍♂️ Daily Activity Classifier")
+st.title("🏃‍♂️ Daily Activity Classifier (Now with Total Steps)")
 st.markdown("""
-Predict whether your day was **Active** or **Inactive** based on your metrics.  
-You can enter data manually for a single day or upload a CSV for multiple days.
+This app predicts whether your day was **Active** or **Inactive** based on activity metrics.  
+Enter data manually for one day or upload a CSV for multiple days.
 """)
 
 # -----------------------------------------------------
@@ -32,13 +31,10 @@ model = joblib.load("models/rf_model.pkl")
 features = joblib.load("models/rf_features.pkl")
 
 # -----------------------------------------------------
-# Utility Functions
+# Helper Functions
 # -----------------------------------------------------
-def lbs_to_kg(pounds):
-    return pounds * 0.453592
-
-def inches_to_cm(inches):
-    return inches * 2.54
+def lbs_to_kg(pounds): return pounds * 0.453592
+def inches_to_cm(inches): return inches * 2.54
 
 def calculate_bmr(sex, weight_kg, height_cm):
     """Mifflin-St Jeor Equation (assuming age 30)."""
@@ -48,7 +44,7 @@ def calculate_bmr(sex, weight_kg, height_cm):
         return 10 * weight_kg + 6.25 * height_cm - 5 * 30 - 161
 
 # -----------------------------------------------------
-# Prediction Section
+# Input Section
 # -----------------------------------------------------
 st.header("1️⃣ Enter Your Metrics")
 input_option = st.radio("Input type:", ["Single Day Manual Input", "Upload CSV"])
@@ -58,6 +54,7 @@ if input_option == "Single Day Manual Input":
     weight_lb = st.number_input("Weight (lbs)", min_value=0.0, value=160.0)
     height_in = st.number_input("Height (inches)", min_value=0.0, value=68.0)
     workout_minutes = st.number_input("Workout Minutes", min_value=0.0, value=30.0)
+    total_steps = st.number_input("Total Steps", min_value=0.0, value=8000.0)
     calories_burned_input = st.number_input("Calories Burned During Workout", min_value=0.0, value=250.0)
 
     if st.button("Predict Single Day"):
@@ -68,10 +65,11 @@ if input_option == "Single Day Manual Input":
 
         X_input = pd.DataFrame({
             "workout_minutes": [workout_minutes],
-            "total_calories": [total_calories]
+            "total_calories": [total_calories],
+            "total_steps": [total_steps]
         })
 
-        # Ensure feature alignment
+        # Align columns with model features
         for col in features:
             if col not in X_input.columns:
                 X_input[col] = 0
@@ -88,17 +86,18 @@ if input_option == "Single Day Manual Input":
 
         st.subheader("Visualization")
         fig = px.bar(
-            x=["Workout Minutes", "Total Calories"],
-            y=[workout_minutes, total_calories],
+            x=["Workout Minutes", "Total Calories", "Total Steps"],
+            y=[workout_minutes, total_calories, total_steps],
             labels={"x": "Metric", "y": "Value"},
-            title="Daily Metrics"
+            title="Daily Metrics Overview"
         )
         st.plotly_chart(fig)
 
         st.session_state["last_prediction"] = {
             "date": "Day 1",
             "active": bool(prediction),
-            "calories": total_calories
+            "calories": total_calories,
+            "steps": total_steps
         }
 
 else:
@@ -107,7 +106,7 @@ else:
         df = pd.read_csv(uploaded_file)
         st.write("📄 Raw Data Preview", df.head())
 
-        required_cols = ["sex", "weight_lb", "height_in", "workout_minutes", "calories_burned"]
+        required_cols = ["sex", "weight_lb", "height_in", "workout_minutes", "total_steps", "calories_burned"]
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             st.error(f"Missing columns in CSV: {missing}")
@@ -119,8 +118,10 @@ else:
 
             X_input = pd.DataFrame({
                 "workout_minutes": df["workout_minutes"],
-                "total_calories": df["total_calories"]
+                "total_calories": df["total_calories"],
+                "total_steps": df["total_steps"]
             })
+
             for col in features:
                 if col not in X_input.columns:
                     X_input[col] = 0
@@ -130,7 +131,7 @@ else:
             df["prob_active"] = model.predict_proba(X_input)[:, 1]
 
             st.subheader("Predictions")
-            st.write(df[["workout_minutes", "total_calories", "prediction", "prob_active"]])
+            st.write(df[["workout_minutes", "total_calories", "total_steps", "prediction", "prob_active"]])
 
             st.subheader("Visualization")
             x_vals = df["date"] if "date" in df.columns else [f"Day {i+1}" for i in range(len(df))]
@@ -140,7 +141,7 @@ else:
             st.plotly_chart(fig)
 
 # -----------------------------------------------------
-# Ask Coach AI — OpenAI Cloud Model
+# Ask Coach AI (OpenAI GPT-4o-mini)
 # -----------------------------------------------------
 st.header("2️⃣ Ask Coach AI")
 user_q = st.text_area("Ask anything about improving your activity, routines, or habits:")
@@ -152,7 +153,8 @@ if st.button("Get Advice") and user_q.strip():
         context = (
             f"On {last_prediction['date']}, you were classified as "
             f"{'Active ✅' if last_prediction['active'] else 'Inactive 💤'}, "
-            f"with {round(last_prediction['calories'],1)} total calories burned.\n"
+            f"with {round(last_prediction['calories'],1)} total calories burned "
+            f"and {int(last_prediction['steps'])} steps.\n"
         )
 
     SAFETY_PROMPT = (
